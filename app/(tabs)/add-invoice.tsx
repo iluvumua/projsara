@@ -1,10 +1,13 @@
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
+import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Image,
+  Modal,
   SafeAreaView,
   StyleSheet,
   Text,
@@ -12,7 +15,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { invoiceService } from '../api';
 
 export default function AddInvoiceScreen() {
   const [company, setCompany] = useState('');
@@ -22,6 +25,7 @@ export default function AddInvoiceScreen() {
   const [amount, setAmount] = useState('');
   const [selectedFileUri, setSelectedFileUri] = useState<string | null>(null);
   const [fileType, setFileType] = useState<'image' | 'pdf' | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const router = useRouter();
 
@@ -31,28 +35,71 @@ export default function AddInvoiceScreen() {
       return;
     }
     router.push({
-        pathname: '/invoice_data',
-        params: {
-          company,
-          invoiceNumber,
-          issueDate,
-          dueDate,
-          amount,
-        },
-      }); 
+      pathname: '/invoice_data',
+      params: {
+        company,
+        invoiceNumber,
+        issueDate,
+        dueDate,
+        amount,
+      },
+    });
   };
 
-  const handleSubmit1 = () => {
+  const handleSubmit1 = async () => {
     if (!selectedFileUri) {
-      Alert.alert('Error', 'Please select an image or PDF file to upload.');
+      Alert.alert('Error', 'Please select a file to upload.');
       return;
     }
-    router.push({
+
+    try {
+      setLoading(true);
+
+      let response;
+      if (fileType === 'pdf') {
+        // For PDF, send as file with correct mime type
+        const formData = new FormData();
+        formData.append('file', {
+          uri: selectedFileUri,
+          name: 'invoice.pdf',
+          type: 'application/pdf',
+        } as any);
+
+        response = await invoiceService.extractFromFile(formData);
+      } else if (fileType === 'image') {
+        response = await invoiceService.extractFromImage(selectedFileUri);
+      } else {
+        Alert.alert('Error', 'Unsupported file type.');
+        setLoading(false);
+        return;
+      }
+
+      const { success, invoice, error } = response;
+
+      if (!success) {
+        throw new Error(error || 'Failed to extract invoice data');
+      }
+
+      setLoading(false);
+
+      router.push({
         pathname: '/invoice_data',
         params: {
+          id: invoice._id, // Pass the invoice ID
+          company: invoice.vendor_details?.name || '',
+          invoiceNumber: invoice.invoice_number || '',
+          issueDate: invoice.invoice_date || '',
+          dueDate: invoice.due_date || '',
+          amount: invoice.total_amount || '',
           imageUri: selectedFileUri,
+          extractedData: JSON.stringify(invoice), // Pass all data as string
         },
       });
+    } catch (error: any) {
+      setLoading(false);
+      Alert.alert('Error', error.message || 'Failed to process invoice');
+      console.error('Invoice processing error:', error);
+    }
   };
 
   const handleCaptureWithCamera = async () => {
@@ -160,7 +207,6 @@ export default function AddInvoiceScreen() {
             placeholder="Amount"
             value={amount}
             onChangeText={setAmount}
-            
           />
 
           <TouchableOpacity style={styles.navButton1} onPress={handleSubmit}>
@@ -209,6 +255,16 @@ export default function AddInvoiceScreen() {
             </TouchableOpacity>
           </View>
         </View>
+
+        <Modal visible={loading} transparent animationType="fade">
+          <View style={styles.modalBackground}>
+            <View style={styles.modalContainer}>
+              <Text style={styles.modalTitle}>Processing</Text>
+              <Text style={styles.modalMessage}>Extracting invoice data...</Text>
+              <ActivityIndicator size="large" color="#007bff" style={{ marginTop: 20 }} />
+            </View>
+          </View>
+        </Modal>
       </View>
     </SafeAreaView>
   );
@@ -261,4 +317,25 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: '100%',
   },
-});  
+  modalBackground: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContainer: {
+    backgroundColor: '#fff',
+    padding: 20,
+    borderRadius: 8,
+    width: 280,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
+  modalMessage: {
+    marginTop: 10,
+    fontSize: 16,
+  },
+});
